@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mini CapCut Editor</title>
+  <style>
+    body { font-family: system-ui, "Segoe UI", Roboto, "Noto Sans Bengali", sans-serif; margin:18px; background:#0f172a; color:#e6eef8; }
+    .card { background:#0b1220; padding:18px; border-radius:12px; max-width:900px; margin:0 auto; box-shadow:0 8px 20px rgba(2,6,23,.6);}
+    h1{font-size:20px;margin:0 0 8px;}
+    label{display:block;margin-top:10px;font-weight:600;}
+    button,input[type=file],input[type=range]{padding:8px;border-radius:8px;border:0;background:#111827;color:#e6eef8; cursor:pointer; transition:0.2s;}
+    button:hover{background:#1e293b;}
+    video{width:100%;border-radius:8px;background:#000;}
+    .controls{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;}
+    .small{font-size:13px;color:#9fb0c8;}
+    .progress{height:10px;background:#081427;border-radius:6px;overflow:hidden;margin-top:6px;}
+    .bar{height:100%;width:0;background:linear-gradient(90deg,#4f46e5,#06b6d4);}
+    .note{margin-top:10px;color:#9fb0c8;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Mini CapCut-style Editor (HTML + FFmpeg.wasm)</h1>
+    <p class="small">ভিডিও আপলোড → ট্রিম → মিউজিক যোগ → এক্সপোর্ট। ব্রাউজারে কাজ করবে।</p>
+    
+    <label>ভিডিও আপলোড (MP4 ভাল)</label>
+    <input id="videoFile" type="file" accept="video/*">
+    
+    <label>মিউজিক/অডিও (ঐচ্ছিক)</label>
+    <input id="audioFile" type="file" accept="audio/*">
+    
+    <div style="margin-top:12px;">
+      <video id="videoPreview" controls></video>
+    </div>
+    
+    <div class="controls">
+      <div style="flex:1 1 300px">
+        <label>Start: <span id="startLabel">0.00</span>s</label>
+        <input id="startRange" type="range" min="0" max="0" step="0.1" value="0">
+      </div>
+      <div style="flex:1 1 300px">
+        <label>End: <span id="endLabel">0.00</span>s</label>
+        <input id="endRange" type="range" min="0" max="0" step="0.1" value="0">
+      </div>
+    </div>
+    
+    <div class="controls">
+      <button id="loadBtn">ভিডিও লোড</button>
+      <button id="trimBtn">Trim / Slice</button>
+      <button id="mergeAudioBtn">Add Music & Merge</button>
+      <button id="exportBtn">Export MP4</button>
+    </div>
+    
+    <div class="progress">
+      <div id="progBar" class="bar"></div>
+    </div>
+    <div id="log" class="small note"></div>
+    <div class="note">নোট: প্রথমবার FFmpeg লোডে কিছু সময় লাগতে পারে। Mobile-এ বড় ফাইল ধীর হতে পারে।</div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/ffmpeg.min.js"></script>
+  <script>
+    const { createFFmpeg, fetchFile } = FFmpeg;
+    const ffmpeg = createFFmpeg({ log:true });
+    const videoFileInput = document.getElementById('videoFile');
+    const audioFileInput = document.getElementById('audioFile');
+    const videoPreview = document.getElementById('videoPreview');
+    const loadBtn = document.getElementById('loadBtn');
+    const trimBtn = document.getElementById('trimBtn');
+    const mergeAudioBtn = document.getElementById('mergeAudioBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    const startRange = document.getElementById('startRange');
+    const endRange = document.getElementById('endRange');
+    const startLabel = document.getElementById('startLabel');
+    const endLabel = document.getElementById('endLabel');
+    const logEl = document.getElementById('log');
+    const progBar = document.getElementById('progBar');
+
+    let originalVideoFile=null, trimmedFileName='trimmed.mp4', finalFileName='final.mp4';
+    function log(txt){ logEl.textContent=txt; }
+
+    videoFileInput.onchange=(e)=>{
+      const f=e.target.files[0]; if(!f) return;
+      originalVideoFile=f;
+      const url=URL.createObjectURL(f);
+      videoPreview.src=url;
+      videoPreview.onloadedmetadata=()=>{
+        const d=Math.floor(videoPreview.duration*10)/10;
+        startRange.max=endRange.max=d; endRange.value=d; endLabel.textContent=d.toFixed(2);
+        startLabel.textContent='0.00';
+      }
+      log('ভিডিও লোড হয়েছে।');
+    };
+
+    startRange.oninput=()=>{ startLabel.textContent=parseFloat(startRange.value).toFixed(2); };
+    endRange.oninput=()=>{ endLabel.textContent=parseFloat(endRange.value).toFixed(2); };
+
+    async function ensureFFmpeg(){
+      if(!ffmpeg.isLoaded()){
+        log('FFmpeg লোড হচ্ছে...');
+        await ffmpeg.load();
+        ffmpeg.setProgress(({ratio})=>{ progBar.style.width=Math.min(100,Math.round(ratio*100))+'%'; });
+        log('FFmpeg লোডড।');
+      }
+    }
+
+    loadBtn.onclick=async()=>{
+      if(!originalVideoFile) return log('ভিডিও আপলোড করুন।');
+      await ensureFFmpeg();
+      ffmpeg.FS('writeFile','input.mp4', await fetchFile(originalVideoFile));
+      log('ভিডিও FFmpeg FS-এ লেখা হয়েছে।');
+    };
+
+    trimBtn.onclick=async()=>{
+      if(!originalVideoFile) return log('প্রথমে ভিডিও আপলোড করুন।');
+      const start=parseFloat(startRange.value).toFixed(2);
+      const end=parseFloat(endRange.value).toFixed(2);
+      if(end<=start) return log('End অবশ্যই Start এর বড় হতে হবে।');
+      await ensureFFmpeg();
+      try{
+        log(`Trimming: start=${start}s end=${end}s ...`);
+        await ffmpeg.run('-i','input.mp4','-ss',start,'-to',end,'-c','copy','trimmed.mp4');
+        const data=ffmpeg.FS('readFile','trimmed.mp4');
+        videoPreview.src=URL.createObjectURL(new Blob([data.buffer],{type:'video/mp4'}));
+        log('Trim সম্পন্ন।');
+      }catch(e){ log('Trim সমস্যা: '+(e.message||e)); }
+    };
+
+    mergeAudioBtn.onclick=async()=>{
+      const audioFile=audioFileInput.files[0];
+      if(!audioFile) return log('মিউজিক আপলোড করুন।');
+      await ensureFFmpeg();
+      try{
+        try{ ffmpeg.FS('stat','trimmed.mp4'); } catch(e){ ffmpeg.FS('writeFile','trimmed.mp4', await fetchFile(originalVideoFile)); }
+        ffmpeg.FS('writeFile','music', await fetchFile(audioFile));
+        log('Music merge হচ্ছে...');
+        await ffmpeg.run('-i','trimmed.mp4','-i','music','-c:v','copy','-c:a','aac','-map','0:v:0','-map','1:a:0','-shortest', finalFileName);
+        const out=ffmpeg.FS('readFile', finalFileName);
+        videoPreview.src=URL.createObjectURL(new Blob([out.buffer],{type:'video/mp4'}));
+        log('Music merge সম্পন্ন।');
+      }catch(e){ log('Merge সমস্যা: '+(e.message||e)); }
+    };
+
+    exportBtn.onclick=async()=>{
+      await ensureFFmpeg();
+      const candidates=[finalFileName,'trimmed.mp4','input.mp4'];
+      let chosen=null;
+      for(const c of candidates){ try{ ffmpeg.FS('stat',c); chosen=c; break;} catch(e){} }
+      if(!chosen) return log('প্রক্রিয়াজাত ফাইল পাওয়া যায়নি।');
+      const data=ffmpeg.FS('readFile',chosen);
+      const blob=new Blob([data.buffer],{type:'video/mp4'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download='exported_video.mp4';
+      document.body.appendChild(a); a.click(); a.remove();
+      log('ডাউনলোড শুরু।');
+    };
+  </script>
+</body>
+</html>
